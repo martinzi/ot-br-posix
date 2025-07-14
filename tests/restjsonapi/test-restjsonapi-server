@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-#  Copyright (c) 2024, The OpenThread Authors.
+#  Copyright (c) 2025, The OpenThread Authors.
 #  All rights reserved.
 #
 #  Redistribution and use in source and binary forms, with or without
@@ -29,6 +29,9 @@
 # Run Bruno tests
 #
 # Note: The border router is expected to be connected to a network and not in detached state.
+
+# fail fast on errors
+set -euo pipefail
 
 # Check DELETE collections
 bru run actions/Delete_Actions_Collection.bru --env localhost --output results_$LINENO.json
@@ -59,7 +62,7 @@ bru run devices/Get_Node_json.bru --env localhost --output results_$LINENO.json
 # GET a non-existing item
 bru run devices/Get_DeviceItem_by_ItemId_404.bru --env localhost --output results_$LINENO.json
 
-./setDUTdestination.sh
+./setDUTdestination.sh || true # continue on error, DUT may be configured already
 
 ##############################################################
 ## Actions ##

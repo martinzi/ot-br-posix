@@ -68,8 +68,6 @@ otbr_install()
     fi
 
     otbr_options=(
-        "-DCMAKE_BUILD_TYPE=Debug"
-        "-DCPPHTTPLIB_REQUEST_URI_MAX_LENGTH=2048"
         "-DBUILD_TESTING=OFF"
         "-DCMAKE_INSTALL_PREFIX=/usr"
         "-DOTBR_DBUS=ON"
@@ -109,7 +107,10 @@ otbr_install()
     fi
 
     if with REST_API; then
-        otbr_options+=("-DOTBR_REST=ON")
+        otbr_options+=(
+            "-DOTBR_REST=ON"
+            "-DCPPHTTPLIB_REQUEST_URI_MAX_LENGTH=2048"
+        )
     fi
 
     if with BACKBONE_ROUTER; then
