@@ -1,0 +1,67 @@
+meta {
+  name: GET .well-known/thread (no auth)
+  type: http
+  seq: 1000
+  tags: secure-enrollment-server
+}
+
+get {
+  url: {{protocol}}://{{host}}:{{port}}/.well-known/thread
+  body: none
+  auth: none
+}
+
+headers {
+  Accept: application/json
+}
+
+assert {
+  res.status: eq 200
+  res.body: isJson
+}
+
+tests {
+  test("Well-known metadata retrieved without authentication", function() {
+    const data = res.getBody();
+    expect(data).to.be.an('object');
+    expect(res.status).to.equal(200);
+    expect(res.headers['content-type']).to.include('application/json');
+  });
+
+  test("API metadata structure is correct", function() {
+    const data = res.getBody();
+    expect(data).to.have.property('api');
+    expect(data.api).to.have.property('version');
+    expect(data.api).to.have.property('base');
+    expect(data.api.version).to.equal('0.3.0');
+    expect(data.api.base).to.equal('/api/');
+  });
+
+  test("Links array contains expected entry points", function() {
+    const data = res.getBody();
+    expect(data).to.have.property('links');
+    expect(data.links).to.be.an('array');
+    expect(data.links).to.have.lengthOf(12);
+    
+    // Verify key endpoints exist
+    const hrefs = data.links.map(link => link.href);
+    expect(hrefs).to.include('/.well-known/thread');
+    expect(hrefs).to.include('/.well-known/thread/idevid');
+    expect(hrefs).to.include('/.well-known/thread/ldevid');
+    expect(hrefs).to.include('/.well-known/thread/csr');
+    expect(hrefs).to.include('/api/auth/password');
+    expect(hrefs).to.include('/api/auth/enroll');
+    expect(hrefs).to.include('/api/auth/certs');
+    expect(hrefs).to.include('/api/node');
+    expect(hrefs).to.include('/api/actions');
+    expect(hrefs).to.include('/api/devices');
+    expect(hrefs).to.include('/api/diagnostics');
+  });
+}
+
+docs {
+  Test 1.1: GET .well-known/thread without authentication
+  
+  The .well-known/thread endpoint should be publicly accessible
+  without authentication as per OpenAPI specification.
+}

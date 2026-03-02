@@ -1883,6 +1883,36 @@ void RestWebServer::WellKnownThreadGetHandler(const Request &aRequest, Response 
       "href": ")" OT_REST_ROUTE_DIAGNOSTICS R"(",
       "rel": "diagnostic",
       "type": [")" OT_REST_CONTENT_TYPE_JSONAPI R"("]
+    },
+    {
+      "href": "/.well-known/thread/idevid",
+      "rel": "idevid",
+      "type": ["application/pkcs7-mime; smime-type=certs-only"]
+    },
+    {
+      "href": "/.well-known/thread/ldevid",
+      "rel": "ldevid",
+      "type": ["application/pkcs7-mime; smime-type=certs-only", "application/x-pem-file"]
+    },
+    {
+      "href": "/.well-known/thread/csr",
+      "rel": "csr",
+      "type": ["application/pkcs10"]
+    },
+    {
+      "href": "/api/auth/password",
+      "rel": "password",
+      "type": ["text/plain; charset=UTF-8"]
+    },
+    {
+      "href": "/api/auth/enroll",
+      "rel": "enroll",
+      "type": [")" OT_REST_CONTENT_TYPE_JSON R"("]
+    },
+    {
+      "href": "/api/auth/certs",
+      "rel": "certs",
+      "type": ["application/pkcs7-mime; smime-type=certs-only"]
     }
   ]
 })";
