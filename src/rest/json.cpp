@@ -227,9 +227,9 @@ static cJSON *Mode2Json(const otLinkModeConfig &aMode)
 {
     cJSON *mode = cJSON_CreateObject();
 
-    cJSON_AddItemToObject(mode, "rxOnWhenIdle", cJSON_CreateBool(aMode.mRxOnWhenIdle));
-    cJSON_AddItemToObject(mode, "deviceTypeFTD", cJSON_CreateBool(aMode.mDeviceType));
-    cJSON_AddItemToObject(mode, "fullNetworkData", cJSON_CreateBool(aMode.mNetworkData));
+    cJSON_AddItemToObject(mode, KEY_RXONWHENIDLE, cJSON_CreateBool(aMode.mRxOnWhenIdle));
+    cJSON_AddItemToObject(mode, KEY_ISFTD, cJSON_CreateBool(aMode.mDeviceType));
+    cJSON_AddItemToObject(mode, KEY_FULLNETWORKDATA, cJSON_CreateBool(aMode.mNetworkData));
 
     return mode;
 }
@@ -371,11 +371,11 @@ static cJSON *ChildTableEntry2Json(const otNetworkDiagChildEntry &aChildEntry)
     cJSON *childEntry = cJSON_CreateObject();
 
     cJSON_AddItemToObject(childEntry, "childId", cJSON_CreateNumber(aChildEntry.mChildId));
-    cJSON_AddItemToObject(childEntry, "timeout", cJSON_CreateNumber(aChildEntry.mTimeout));
+    cJSON_AddItemToObject(childEntry, KEY_TIMEOUT, cJSON_CreateNumber(aChildEntry.mTimeout));
     cJSON_AddItemToObject(childEntry, "linkQuality", cJSON_CreateNumber(aChildEntry.mLinkQuality));
 
     cJSON *mode = Mode2Json(aChildEntry.mMode);
-    cJSON_AddItemToObject(childEntry, "mode", mode);
+    cJSON_AddItemToObject(childEntry, KEY_MODE, mode);
 
     return childEntry;
 }
@@ -1432,10 +1432,10 @@ cJSON *JoinerInfo2Json(const otJoinerInfo &aJoinerInfo)
 {
     cJSON *node = cJSON_CreateObject();
 
-    cJSON_AddItemToObject(node, "Pskd", cJSON_CreateString(aJoinerInfo.mPskd.m8));
+    cJSON_AddItemToObject(node, KEY_PSKD, cJSON_CreateString(aJoinerInfo.mPskd.m8));
     if (aJoinerInfo.mType == OT_JOINER_INFO_TYPE_EUI64)
     {
-        cJSON_AddItemToObject(node, "Eui64", Bytes2HexJson(aJoinerInfo.mSharedId.mEui64.m8, OT_EXT_ADDRESS_SIZE));
+        cJSON_AddItemToObject(node, KEY_EUI64, Bytes2HexJson(aJoinerInfo.mSharedId.mEui64.m8, OT_EXT_ADDRESS_SIZE));
     }
     else if (aJoinerInfo.mType == OT_JOINER_INFO_TYPE_DISCERNER)
     {
@@ -1444,13 +1444,13 @@ cJSON *JoinerInfo2Json(const otJoinerInfo &aJoinerInfo)
 
         otbr::Utils::Long2Hex(aJoinerInfo.mSharedId.mDiscerner.mValue, hexValue);
         snprintf(string, sizeof(string), "0x%s/%d", hexValue, aJoinerInfo.mSharedId.mDiscerner.mLength);
-        cJSON_AddItemToObject(node, "Discerner", cJSON_CreateString(string));
+        cJSON_AddItemToObject(node, "discerner", cJSON_CreateString(string));
     }
     else
     {
-        cJSON_AddItemToObject(node, "JoinerId", cJSON_CreateString("*"));
+        cJSON_AddItemToObject(node, "joinerId", cJSON_CreateString("*"));
     }
-    cJSON_AddItemToObject(node, "Timeout", cJSON_CreateNumber(aJoinerInfo.mExpirationTime));
+    cJSON_AddItemToObject(node, KEY_TIMEOUT, cJSON_CreateNumber(aJoinerInfo.mExpirationTime));
 
     return node;
 }
@@ -1552,7 +1552,7 @@ bool JsonJoinerInfo2JoinerInfo(const cJSON *jsonJoinerInfo, otJoinerInfo &aJoine
     memset(&aJoinerInfo.mSharedId.mEui64, 0, sizeof(aJoinerInfo.mSharedId.mEui64));
     memset(&aJoinerInfo.mPskd.m8, 0, sizeof(aJoinerInfo.mPskd.m8));
 
-    value = cJSON_GetObjectItemCaseSensitive(jsonJoinerInfo, "pskd");
+    value = cJSON_GetObjectItemCaseSensitive(jsonJoinerInfo, KEY_PSKD);
     if (cJSON_IsString(value))
     {
         VerifyOrExit(value->valuestring != nullptr);
@@ -1564,7 +1564,7 @@ bool JsonJoinerInfo2JoinerInfo(const cJSON *jsonJoinerInfo, otJoinerInfo &aJoine
         ExitNow();
     }
 
-    value = cJSON_GetObjectItemCaseSensitive(jsonJoinerInfo, "JoinerId");
+    value = cJSON_GetObjectItemCaseSensitive(jsonJoinerInfo, "joinerId");
     if (cJSON_IsString(value))
     {
         VerifyOrExit(aJoinerInfo.mType == OT_JOINER_INFO_TYPE_ANY);
@@ -1599,7 +1599,7 @@ bool JsonJoinerInfo2JoinerInfo(const cJSON *jsonJoinerInfo, otJoinerInfo &aJoine
         }
     }
 
-    value = cJSON_GetObjectItemCaseSensitive(jsonJoinerInfo, "eui");
+    value = cJSON_GetObjectItemCaseSensitive(jsonJoinerInfo, KEY_EUI64);
     if (cJSON_IsString(value))
     {
         VerifyOrExit(aJoinerInfo.mType == OT_JOINER_INFO_TYPE_ANY);
@@ -1613,7 +1613,7 @@ bool JsonJoinerInfo2JoinerInfo(const cJSON *jsonJoinerInfo, otJoinerInfo &aJoine
     }
 
     aJoinerInfo.mExpirationTime = 60;
-    value                       = cJSON_GetObjectItemCaseSensitive(jsonJoinerInfo, "timeout");
+    value                       = cJSON_GetObjectItemCaseSensitive(jsonJoinerInfo, KEY_TIMEOUT);
     if (cJSON_IsNumber(value))
     {
         aJoinerInfo.mExpirationTime = value->valueint;
@@ -1726,19 +1726,19 @@ static cJSON *MeshChildEntry2Json(const otMeshDiagChildEntry &aChild)
 {
     cJSON *child = cJSON_CreateObject();
 
-    cJSON_AddItemToObject(child, "rxOnWhenIdle", cJSON_CreateBool(aChild.mRxOnWhenIdle));
-    cJSON_AddItemToObject(child, "deviceTypeFTD", cJSON_CreateBool(aChild.mDeviceTypeFtd));
-    cJSON_AddItemToObject(child, "fullNetworkData", cJSON_CreateBool(aChild.mFullNetData));
+    cJSON_AddItemToObject(child, KEY_RXONWHENIDLE, cJSON_CreateBool(aChild.mRxOnWhenIdle));
+    cJSON_AddItemToObject(child, KEY_ISFTD, cJSON_CreateBool(aChild.mDeviceTypeFtd));
+    cJSON_AddItemToObject(child, KEY_FULLNETWORKDATA, cJSON_CreateBool(aChild.mFullNetData));
     cJSON_AddItemToObject(child, "cslSynchronized", cJSON_CreateBool(aChild.mCslSynchronized));
     cJSON_AddItemToObject(child, "supportsErrorRate", cJSON_CreateBool(aChild.mSupportsErrRate));
 
-    cJSON_AddItemToObject(child, "rloc16", Number2HexJson(aChild.mRloc16));
+    cJSON_AddItemToObject(child, KEY_RLOC16, Number2HexJson(aChild.mRloc16));
     cJSON_AddItemToObject(child, "childId", cJSON_CreateNumber(aChild.mRloc16 & CHILD_MASK));
-    cJSON_AddItemToObject(child, "extAddress", Bytes2HexJson(aChild.mExtAddress.m8, OT_EXT_ADDRESS_SIZE));
-    cJSON_AddItemToObject(child, "version", cJSON_CreateNumber(aChild.mVersion));
-    cJSON_AddItemToObject(child, "timeout", cJSON_CreateNumber(aChild.mTimeout));
+    cJSON_AddItemToObject(child, KEY_EXTADDRESS, Bytes2HexJson(aChild.mExtAddress.m8, OT_EXT_ADDRESS_SIZE));
+    cJSON_AddItemToObject(child, KEY_VERSION, cJSON_CreateNumber(aChild.mVersion));
+    cJSON_AddItemToObject(child, KEY_TIMEOUT, cJSON_CreateNumber(aChild.mTimeout));
     cJSON_AddItemToObject(child, "age", cJSON_CreateNumber(aChild.mAge));
-    cJSON_AddItemToObject(child, "connectionTime", cJSON_CreateNumber(aChild.mConnectionTime));
+    cJSON_AddItemToObject(child, "linkAge", cJSON_CreateNumber(aChild.mConnectionTime));
 
     if (aChild.mSupervisionInterval != 0)
     {
@@ -1788,8 +1788,8 @@ static cJSON *MeshChildIp62Json(const DeviceIp6Addrs &aChildIp6Addrs)
 {
     cJSON *child = cJSON_CreateObject();
 
-    cJSON_AddItemToObject(child, "rloc16", Number2HexJson(aChildIp6Addrs.mRloc16));
-    // cJSON_AddItemToObject(child, "ExtAddress", Bytes2HexJson(aChild.mExtAddress.m8, OT_EXT_ADDRESS_SIZE));
+    cJSON_AddItemToObject(child, KEY_RLOC16, Number2HexJson(aChildIp6Addrs.mRloc16));
+    // cJSON_AddItemToObject(child, KEY_EXTADDRESS, Bytes2HexJson(aChild.mExtAddress.m8, OT_EXT_ADDRESS_SIZE));
 
     cJSON *ips = cJSON_CreateArray();
 
@@ -1820,10 +1820,10 @@ static cJSON *MeshRouterNeighborEntry2Json(const otMeshDiagRouterNeighborEntry &
     cJSON *neighbor = cJSON_CreateObject();
 
     cJSON_AddItemToObject(neighbor, "supportsErrorRate", cJSON_CreateBool(aNeighbor.mSupportsErrRate));
-    cJSON_AddItemToObject(neighbor, "rloc16", Number2HexJson(aNeighbor.mRloc16));
-    cJSON_AddItemToObject(neighbor, "extAddress", Bytes2HexJson(aNeighbor.mExtAddress.m8, OT_EXT_ADDRESS_SIZE));
-    cJSON_AddItemToObject(neighbor, "version", cJSON_CreateNumber(aNeighbor.mVersion));
-    cJSON_AddItemToObject(neighbor, "connectionTime", cJSON_CreateNumber(aNeighbor.mConnectionTime));
+    cJSON_AddItemToObject(neighbor, KEY_RLOC16, Number2HexJson(aNeighbor.mRloc16));
+    cJSON_AddItemToObject(neighbor, KEY_EXTADDRESS, Bytes2HexJson(aNeighbor.mExtAddress.m8, OT_EXT_ADDRESS_SIZE));
+    cJSON_AddItemToObject(neighbor, KEY_VERSION, cJSON_CreateNumber(aNeighbor.mVersion));
+    cJSON_AddItemToObject(neighbor, "linkAge", cJSON_CreateNumber(aNeighbor.mConnectionTime));
     cJSON_AddItemToObject(neighbor, "linkMargin", cJSON_CreateNumber(aNeighbor.mLinkMargin));
     cJSON_AddItemToObject(neighbor, "averageRssi", cJSON_CreateNumber(aNeighbor.mAverageRssi));
     cJSON_AddItemToObject(neighbor, "lastRssi", cJSON_CreateNumber(aNeighbor.mLastRssi));
