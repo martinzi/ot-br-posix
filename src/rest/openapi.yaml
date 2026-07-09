@@ -1032,7 +1032,7 @@ paths:
                             partIdChangesCount: 0
                             betterPartIdAttachAttemptsCount: 0
                             newParentCount: 1
-                            trackingTime: 44000.000
+                            totalTrackingTime: 44000.000
                             radioDisabledTime: 21.434
                             detachedRoleTime: 174.560
                             childRoleTime: 62.006
@@ -1101,7 +1101,7 @@ paths:
                             partIdChangesCount: 0
                             betterPartIdAttachAttemptsCount: 0
                             newParentCount: 1
-                            trackingTime: 43576.123
+                            totalTrackingTime: 43576.123
                             radioDisabledTime: 20.788
                             detachedRoleTime: 342.333
                             childRoleTime: 43213.002
