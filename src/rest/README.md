@@ -2,7 +2,7 @@
 
 ## Summary
 
-An extended `REST` API functionality providing capabilities for commissioning and on-mesh diagnostics to generic off-mesh HTTP/HTTPS clients. The implementation is guided by the [JSON:API specification](https://jsonapi.org/format/). All the resources are described in [openapi.yaml](./openapi.yaml) specification. The intent of this document is to provide basic usage and additional background information.
+An extended `REST` API functionality providing capabilities for commissioning and on-mesh diagnostics to generic off-mesh HTTP/HTTPS clients. The implementation is guided by the [JSON:API specification](https://jsonapi.org/format/). All the resources are described in [openapi.yaml](./openapi.yaml) specification, also see [rendered openapi.yaml](https://petstore.swagger.io/?url=https://raw.githubusercontent.com/openthread/ot-br-posix/refs/heads/main/src/rest/openapi.yaml). The intent of this document is to provide basic usage and additional background information.
 
 ## Use cases
 
@@ -28,7 +28,7 @@ A consumer may extract the data from the API and visualize it elsewhere.
 
 The list of Thread network devices is provided as JSON:API collection on the devices resource `/api/devices`. The collection provides collection items of type `threadDevice`, one per active Thread device found during discovery. The `threadDevice` items shall serve as an inventory of devices and provide primarily static information, in particular a static `deviceId` for each device with some key attributes allowing to identify the device. The collection may contain devices that became inactive. It is discovered, updated, or deleted on-demand.
 
-The Thread Border Router learns the list of network devices from the active network and returns the full collection or individual items in response to GET requests. The collection may be updated or deleted by a client on request, see section `api/actions` below. A DELETE request to `/api/devices` removes the cached collection.
+The Thread Border Router learns the list of network devices on-demand from the active network and returns the full collection or individual items in response to GET requests. The collection may be updated or deleted by a client on request, see `updateDeviceCollectionTask` in section `api/actions` below. A DELETE request to `/api/devices` removes the cached collection.
 
 #### Device identification
 
@@ -344,7 +344,7 @@ Detailed request examples are provided in the test folder as a "Bruno Request Co
 
 1. Start your joiner and after a few seconds repeat above last two steps.
 
-1. For further viewing of the diagnostic endpoints, see the Python demo test script `http_action_client_demo.py` or use the Bruno request collection, you can find both in the folder [tests/restjsonapi](./../../tests/restjsonapi).
+1. For further viewing of the diagnostic endpoints use the Bruno request collection, you can find in the folder [tests/restjsonapi](./../../tests/restjsonapi).
 
 1. For running the included test script install Bruno-Cli and run the bash script on your border router:
 

@@ -6,13 +6,27 @@ info:
     the REST API listens on any address on port 8081.
 
     Some useful links:
-    - [OpenThread Border Router repository](github.com/openthread/ot-br-posix/)
+    - [OpenThread Border Router repository](https://github.com/openthread/ot-br-posix/)
+    - [Readme REST JSON:API for Commissioner and Diagnostics](https://github.com/openthread/ot-br-posix/blob/main/docs/rest/README.md)
   license:
     name: BSD 3-Clause
     url: https://github.com/openthread/ot-br-posix/blob/main/LICENSE
-  version: 0.3.0
+  version: 0.4.0
 servers:
-  - url: http://localhost:8081
+  - url: "{protocol}://{host}:{port}"
+    description: Configurable Border Router destination.
+    variables:
+      protocol:
+        default: "http"
+        enum:
+          - "http"
+          - "https"
+      host:
+        default: "localhost"
+        description: The server host address.
+      port:
+        default: "8081"
+        description: The target port.
 tags:
   - name: Actions
     description: Task queue.
