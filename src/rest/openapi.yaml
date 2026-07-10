@@ -7,10 +7,19 @@ info:
 
     Some useful links:
     - [OpenThread Border Router repository](https://github.com/openthread/ot-br-posix/)
-    - [Readme REST JSON:API for Commissioner and Diagnostics](https://github.com/openthread/ot-br-posix/blob/main/docs/rest/README.md)
+    - [Readme REST JSON:API for Commissioner and Diagnostics](https://github.com/openthread/ot-br-posix/blob/main/src/rest/README.md)
 
     ## Discovery through DNS-SD
-    The REST API is discoverable via the following DNS-SD service:
+    The Border Router is discoverable via DNS Service Discovery (DNS-SD)
+
+    For IETF Demo OTBR
+    * Clients can use DNS-SD to find the Border Router on the local network and obtain its hostname and IP address.
+    * Service Type: `_meshcop._udp`
+    * Service Instance Name: `Siemens Thread Border Router Demo`
+    * Domain: `.local`
+    * The REST API is provided on port 8081 (HTTP) without the below described security mechanisms.
+
+    The REST API is (in future) discoverable via the following DNS-SD service:
     * Service Instance Name: `<serial-no>`
     * Service Type: `_thread._tcp`
       * Subtype for all TBRs: `_tbr._sub._thread._tcp`
@@ -244,6 +253,7 @@ servers:
       port:
         default: "443"
         description: HTTPS port
+security: []
 tags:
   - name: Well-Known
     description: RFC 8615 Well-Known URIs for API discovery and security enrollment.
@@ -254,9 +264,9 @@ tags:
   - name: node
     description: Thread parameters of this node.
   - name: Devices
-    description: Collection of discovered Thread devices.
+    description: Collection of discovered Thread devices, updated via `updateDeviceCollectionTask` in `api/actions`.
   - name: Diagnostics
-    description: Collection of Thread network diagnostic responses.
+    description: Collection of Thread network diagnostic responses triggered via tasks in `api/actions`.
 paths:
 
   ### Well-Known ##############################################################
@@ -296,6 +306,465 @@ paths:
                 type: string
                 example: "GET, OPTIONS"
 
+  ### Security ################################################################
+  #############################################################################
+  /api/auth/password:
+    post:
+      operationId: getProposedPassword
+      summary: Generate password
+      description: |
+        Trigger to generate a password proposal for client authentication that fulfills the password policy.
+
+        The device generates a UTF-8 string without any UTF-8 control characters of 16 to 24 bytes in length.
+        It is not applied and the client may set it using a PUT request with a copy of the body to confirm the proposal.
+
+        ## Link Attributes (`/.well-known/thread`)
+        `rel="password" type="text/plain; charset=UTF-8"`
+      tags:
+        - Security
+      security:
+        - basicAuth: []
+        - mutualCertAuth: []
+      responses:
+        "200":
+          $ref: "#/components/responses/Password200"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+    put:
+      operationId: setPassword
+      summary: Change password
+      description: |
+        Input to set a new UTF-8 based REST API password for client authentication. The string is also applied as Thread *Commissioning Credential*.
+
+        ## Condition
+        - minimum 12 characters
+        - maximum 255 bytes (UTF-8 characters may consist of multiple bytes)
+        - no control characters (e.g., not lower than `\x20`)
+        - three out of four must be met:
+          - at least one uppercase alphabetic character
+          - at least one lowercase alphabetic character
+          - at least one digit
+          - at least one non-alphanumeric character
+
+        ## On Success
+        - changes the password for the user `admin` used for *Basic Auth*
+        - returns 204 No Content
+
+        ## On Failure
+        Returns one of the following:
+          - 415 Unsupported Media Type, when the request content type is not `text/plain; charset=UTF-8`, `application/json`, nor empty (tolerant server)
+          - 422 Unprocessable Content, when the request body does not respect the password format or policies
+          - 500 Internal Server Error, if the server fails to change the password
+
+      tags:
+        - Security
+      security:
+        - basicAuth: []
+        - mutualCertAuth: []
+      requestBody:
+        $ref: "#/components/requestBodies/PasswordReq"
+      responses:
+        "204":
+          description: Indicates successful password change.
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaTypeError"
+        "422":
+          $ref: "#/components/responses/UnprocessableError"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+    delete:
+      operationId: deletePassword
+      summary: Remove password
+      description: |
+        Remove the password for the user `admin`, thereby disabling Basic Authentication. Note that the *Commissioning Credential* remains unchanged.
+
+        ## Condition
+        Requires at least one other authentication method (mutual certificate authentication) to be configured;
+        otherwise returns 409 Conflict.
+
+        ## On Success
+        - removes the password for the user `admin`
+        - disables Basic Authentication
+        - returns 204 No Content
+
+        ## On Failure
+        Returns one of the following:
+          - 409 Conflict, if no other authentication method is configured
+          - 500 Internal Server Error, if the server fails to remove the password
+      tags:
+        - Security
+      security:
+        - basicAuth: []
+        - mutualCertAuth: []
+      responses:
+        "204":
+          description: Indicates successful password removal.
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/auth/enroll:
+    post:
+      operationId: invokeEnrollment
+      summary: Enrollment trigger
+      description: |
+        Trigger enrollment with upstream system by switching to the operational certificate (or its renewal).
+
+        ## Modes
+
+        ### Push Mode (preloaded LDevID)
+        Switch to a preloaded LDevID certificate that was previously uploaded via `/.well-known/thread/ldevid`.
+
+        #### Request Body
+        ```json
+        {
+          "est_mode": "push"
+        }
+        ```
+        Or empty POST treated as push mode.
+
+        #### Condition
+        Requires the operational LDevID certificate generated and the initial password changed;
+        otherwise returns 409 Conflict.
+
+        #### Background Logic
+        - closes the TLS session of potential keep-alive connections
+        - changes the HTTPS server certificate to the latest LDevID certificate provided in the *Well-Known* endpoint `/.well-known/thread/ldevid`
+        - may reboot the Web server or devices to apply changes
+
+        ### Pull Mode (EST enrollment)
+        Automatically enroll with an EST (Enrollment over Secure Transport, RFC 7030) server to obtain an LDevID certificate.
+
+        #### Request Body
+        ```json
+        {
+          "est_server": "https://est.example.com"
+        }
+        ```
+
+        #### Background Logic
+        The TBR performs the following operations automatically:
+        1. Validates the EST server URL (HTTPS required)
+        2. Fetches CA certificates from `{est_server}/.well-known/est/cacerts` using IDevID for mTLS authentication
+        3. Updates the local CA trust bundle with received CA certificates
+        4. Generates a Certificate Signing Request (CSR) for LDevID with Subject Alternative Name matching the TBR's hostname (e.g., `hostname.local`)
+        5. Submits the CSR to `{est_server}/.well-known/est/simpleenroll` using IDevID for mTLS authentication
+        6. Receives and stores the issued LDevID certificate
+        7. Switches the active HTTPS server certificate to the new LDevID certificate
+        8. Reloads the TLS configuration without service interruption
+
+        #### Conditions
+        - Requires IDevID certificate and private key to be available for EST server authentication
+        - EST server must be accessible via HTTPS
+        - EST server must support RFC 7030 endpoints: `/cacerts` and `/simpleenroll`
+
+        ## Link Attributes (`/.well-known/thread`)
+        `rel="enroll" type="application/json"`
+      tags:
+        - Security
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              oneOf:
+                - required:
+                    - est_mode
+                  properties:
+                    est_mode:
+                      type: string
+                      enum:
+                        - push
+                      description: Push mode - use preloaded LDevID certificate
+                      example: push
+                - required:
+                    - est_server
+                  properties:
+                    est_server:
+                      type: string
+                      format: uri
+                      description: Pull mode - HTTPS URL of the EST server to fetch LDevID from
+                      example: https://est.example.com
+                    tls_verify:
+                      type: boolean
+                      default: true
+                      description: |
+                        When `true` (default), the TBR verifies the EST server's TLS certificate
+                        against its CA bundle and rejects connections to loopback, RFC1918, and
+                        link-local addresses (SSRF protection).
+
+                        When `false`, TLS certificate verification is **disabled** and the SSRF
+                        address guard is **bypassed**. Use only to bootstrap enrollment against an
+                        EST server whose CA certificate has not yet been pre-loaded via
+                        `PUT /api/auth/certs`. The operator takes full responsibility for ensuring
+                        the EST server identity.
+
+                        **Security warning**: Setting `tls_verify=false` exposes the TBR to
+                        man-in-the-middle attacks during the enrollment exchange. Use only in
+                        controlled network environments and revert to `tls_verify=true` once the
+                        EST CA certificate is trusted.
+                      example: false
+      security:
+        - basicAuth: []
+        - mutualCertAuth: []
+      responses:
+        "204":
+          description: Indicates successful enrollment trigger or EST enrollment completion.
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/auth/certs:
+    get:
+      operationId: getClientCerts
+      summary: Retrieve stored client certificates
+      description: |
+        Retrieve all client certificates currently stored by the TBR for mutual authentication.
+
+        Supports content negotiation via the Accept header:
+        - `application/json` - Returns a JSON array of certificate metadata (ID, subject, issuer, expiration)
+        - `application/pkcs7-mime` - Returns PKCS#7 certificate bundle (EST-compatible)
+
+        The default (no Accept header) returns PKCS#7 format for EST compatibility.
+        Certificate IDs are the first 32 characters of the SHA-256 fingerprint.
+
+        ## Link Attributes (`/.well-known/thread`)
+        `rel="certs" type="application/json"`
+        `rel="certs" type="application/pkcs7-mime; smime-type=certs-only"`
+      tags:
+        - Security
+      security:
+        - basicAuth: []
+        - mutualCertAuth: []
+      parameters:
+        - name: Accept
+          in: header
+          description: Requested response format
+          schema:
+            type: string
+            enum:
+              - application/json
+              - application/pkcs7-mime
+      responses:
+        "200":
+          $ref: "#/components/responses/ClientCertificates200"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+    put:
+      operationId: putClientCert
+      summary: Store a client certificate (server-generated ID)
+      description: |
+        Store a client certificate where the server generates the ID from the 
+        certificate's SHA-256 fingerprint (first 32 characters, lowercase hex).
+        This is the recommended enrollment method as it ensures ID consistency.
+        
+        ## Enrollment Behavior
+        - **First certificate**: Automatically enrolled as admin with full access scope
+        - **Subsequent certificates**: Enrolled with scope determined by the authenticating client
+        
+        **Role/Scope Configuration** (optional future extensions, not yet implemented):
+        - Certificate-embedded: Extract role/scope from X.509 extensions, Subject Alternative Names, or Subject DN fields
+        - Authorization endpoint: Use `PATCH /api/auth/certs/{id}` to update role/scope after enrollment
+        
+        ## Certificate Format
+        The client certificate must:
+        - Be in PEM format (application/x-pem-file)
+        - Include the full certificate chain (client cert + intermediate CA(s) + root CA)
+        - **NOT include the private key** (private key remains with the client)
+        - Be signed by any trusted CA
+          - Exception: If the first client certificate is enrolled after transitioning to mTLS mode, it must be validated against the TBR's CA bundle.
+          - Subsequent certificates can be signed by any CA (validation by Traefik/TLS layer)
+        
+        ## Server Processing
+        1. Extracts certificate from PEM format
+        2. Calculates SHA-256 fingerprint (first 32 chars as ID)
+        3. Validates certificate chain and expiration
+        4. Extracts Subject DN, Issuer DN, and Subject Alternative Names (SANs)
+        5. Stores certificate metadata in authorization database with generated ID
+        6. Returns the generated certificate ID in response
+        
+        ## Condition
+        The client certificate must be valid and parseable;
+        otherwise returns 422 Unprocessable Content.
+        
+        ## On Success
+        Returns 201 Created with the generated certificate ID in the response body.
+      tags:
+        - Security
+      security:
+        - basicAuth: []
+        - mutualCertAuth: []
+      requestBody:
+        $ref: "#/components/requestBodies/ClientCertPutReq"
+      responses:
+        "201":
+          description: Certificate stored successfully with server-generated ID
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    pattern: '^[a-f0-9]{32}$'
+                    description: Server-generated certificate ID (first 32 chars of SHA-256 fingerprint)
+                  message:
+                    type: string
+                    description: Success message
+                example:
+                  id: "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6"
+                  message: "Client certificate enrolled successfully"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "422":
+          $ref: "#/components/responses/UnprocessableError"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/auth/certs/{id}:
+    get:
+      operationId: getClientCert
+      summary: Retrieve a specific client certificate
+      description: |
+        Retrieve a single client certificate by its ID (first 32 chars of SHA-256 fingerprint).
+        Returns the certificate in PEM format.
+      tags:
+        - Security
+      security:
+        - basicAuth: []
+        - mutualCertAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Certificate ID (first 32 characters of SHA-256 fingerprint)
+          schema:
+            type: string
+            pattern: '^[a-f0-9]{32}$'
+      responses:
+        "200":
+          description: Certificate in PEM format
+          content:
+            application/x-pem-file:
+              schema:
+                type: string
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+    put:
+      operationId: putClientCertById
+      summary: Store or update a client certificate
+      description: |
+        Store a client certificate with a specific ID.
+        The certificate's SHA-256 fingerprint must match the provided ID.
+        Additional certificates may be added by repeating this operation.
+
+        ## Condition
+        The client certificate must be valid and parseable;
+        otherwise returns 422 Unprocessable Content.
+        The certificate's fingerprint must match the provided ID;
+        otherwise returns 400 Bad Request.
+      tags:
+        - Security
+      security:
+        - basicAuth: []
+        - mutualCertAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Certificate ID (first 32 characters of SHA-256 fingerprint)
+          schema:
+            type: string
+            pattern: '^[a-f0-9]{32}$'
+      requestBody:
+        description: Certificate chain in PEM format
+        required: true
+        content:
+          application/x-pem-file; charset=ASCII:
+            schema:
+              $ref: "#/components/schemas/ClientCert"
+      responses:
+        "204":
+          description: Indicates successful storage of client certificate.
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "422":
+          $ref: "#/components/responses/UnprocessableError"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+    delete:
+      operationId: deleteClientCertById
+      summary: Remove a specific client certificate
+      description: |
+        Remove a client certificate by its ID (first 32 chars of SHA-256 fingerprint).
+
+        ## Condition
+        Requires the certificate to exist;
+        otherwise returns 404 Not Found.
+      tags:
+        - Security
+      security:
+        - basicAuth: []
+        - mutualCertAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Certificate ID (first 32 characters of SHA-256 fingerprint)
+          schema:
+            type: string
+            pattern: '^[a-f0-9]{32}$'
+      responses:
+        "204":
+          description: Indicates successful removal of client certificate.
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
   ### Information #############################################################
   #############################################################################
   /api/node:
@@ -314,7 +783,6 @@ paths:
 
         Failing to populate any of the dynamic attributes may lead to a 500 Internal Server Error.
       parameters:
-        - $ref: "#/components/parameters/AcceptJsonApi"
         - $ref: "#/components/parameters/SparseFieldset"
       responses:
         "200":
@@ -329,37 +797,6 @@ paths:
                   - application/json
                   - application/vnd.api+json
           content:
-            application/json:
-              schema:
-                type: object
-              examples:
-                TBR:
-                  summary: Thread Border Router
-                  value:
-                    rloc16: '0xf000'
-                    extAddress: '96518e5497d5b9f3'
-                    mlEidIid: '731f529f1266a17d'
-                    omrIpv6Address:
-                      - 'fd11:22:0:0:92de:b397:5758:368'
-                    hostname: 'knx-00fd5f0123a5.local'
-                    eui: '9035eafffef3e09c'
-                    role: 'leader'
-                    mode:
-                      fullThreadDevice: false
-                      rxOnWhenIdle: false
-                      fullNetworkData: false
-                    baId: 'e11e23c164311ce642f93297b095b2f8'
-                    routerCount: 0
-                    rlocAddress: "fd7a:9882:1777:a344:0:ff:fe00:f000"
-                    networkName: "OpenThread-1234"
-                    routerId: 0
-                    leaderData:
-                      partitionId: 0
-                      weighting: 193
-                      dataVersion: 97
-                      stableDataVersion: 176
-                      leaderRouterId: 78
-                    extPanId: 'a7b7d5d07d9ec2fa'
             application/vnd.api+json:
               examples:
                 TBR:
@@ -394,6 +831,37 @@ paths:
                           leaderRouterId: 78
                         extPanId: 'a7b7d5d07d9ec2fa'
                         created: '2025-02-25T17:31:54+02:00'
+            application/json:
+              schema:
+                type: object
+              examples:
+                TBR:
+                  summary: Thread Border Router
+                  value:
+                    rloc16: '0xf000'
+                    extAddress: '96518e5497d5b9f3'
+                    mlEidIid: '731f529f1266a17d'
+                    omrIpv6Address:
+                      - 'fd11:22:0:0:92de:b397:5758:368'
+                    hostname: 'knx-00fd5f0123a5.local'
+                    eui: '9035eafffef3e09c'
+                    role: 'leader'
+                    mode:
+                      fullThreadDevice: false
+                      rxOnWhenIdle: false
+                      fullNetworkData: false
+                    baId: 'e11e23c164311ce642f93297b095b2f8'
+                    routerCount: 0
+                    rlocAddress: "fd7a:9882:1777:a344:0:ff:fe00:f000"
+                    networkName: "OpenThread-1234"
+                    routerId: 0
+                    leaderData:
+                      partitionId: 0
+                      weighting: 193
+                      dataVersion: 97
+                      stableDataVersion: 176
+                      leaderRouterId: 78
+                    extPanId: 'a7b7d5d07d9ec2fa'
         "400":
           $ref: "#/components/responses/BadRequestError"
         "401":
@@ -432,8 +900,6 @@ paths:
 
         Failing to parse the query parameter(s) leads to a 400 Bad Request Error.
 
-      parameters:
-        - $ref: "#/components/parameters/AcceptJsonApi"
       responses:
         "200":
           description: List of actions.
@@ -446,13 +912,6 @@ paths:
                   - application/json
                   - application/vnd.api+json
           content:
-            application/json:
-              schema:
-                oneOf:
-                  - type: array
-                    items: 
-                      type: object
-                  - type: object
             application/vnd.api+json:
               schema:
                 $ref: "#/components/schemas/ActionsCollection"
@@ -477,11 +936,11 @@ paths:
                   - id: 99f61f7f-8862-4c36-b565-1cb7ce5f89ee
                     type: getNetworkDiagnosticTask
                     attributes:
-                      destination: f2f307043724e8d0,
+                      destination: f2f307043724e8d0
                       types:
                         - extAddress
                         - rloc16
-                        - route
+                        - route64
                         - leaderData
                         - ipv6Addresses
                         - macCounters
@@ -508,7 +967,14 @@ paths:
                     offset: 0
                     limit: 3
                     total: 3
-                    pending: 2  
+                    pending: 2
+            application/json:
+              schema:
+                oneOf:
+                  - type: array
+                    items: 
+                      type: object
+                  - type: object
         "400":
           $ref: "#/components/responses/BadRequestError"
         "401":
@@ -555,16 +1021,18 @@ paths:
         - when a *Task* item completes successfully, its `status` attribute changes to `completed`
         - when a *Task* item completes unsuccessfully, its `status` attribute changes to `stopped`
         - when a *Task* item fails, its `status` attribute changes to `failed`
+         
+        ## Note
+        After a reboot, DELETE of the *Devices* collection, or major changes in the network topology, the `updateDeviceCollectionTask` should be used to re-populate the *Devices* collection with the current state of the Thread network.
+        TODO: consider automatic re-population of the *Devices* collection.
 
-      parameters:
-        - $ref: "#/components/parameters/AcceptJsonApi"
       requestBody:
         description: Creates a new task.
         required: true
         content:
           application/vnd.api+json:
             schema:
-              $ref:  "#/components/schemas/ActionsClient"
+              $ref: "#/components/schemas/ActionsClient"
             examples:
               addThreadDeviceTask:
                 summary: Add new Thread Device to the Network
@@ -879,7 +1347,6 @@ paths:
         otherwise returns 404 Not Found.
       parameters:
         - $ref: "#/components/parameters/actionId"
-        - $ref: "#/components/parameters/AcceptJsonApi"
       responses:
         "200":
           description: |
@@ -893,16 +1360,9 @@ paths:
                   - application/json
                   - application/vnd.api+json
           content:
-            application/json:
-              schema:
-                oneOf:
-                  - type: array
-                    items: 
-                      type: object
-                  - type: object
             application/vnd.api+json:
               schema:
-                $ref: "#/components/schemas/ActionItem"
+                $ref: "#/components/schemas/ActionDocument"
               examples:
                 addThreadDeviceTask:
                   summary: 1211547c-6207-4833-a629-8992ead4068c (Add New Thread Device to Network)
@@ -952,6 +1412,13 @@ paths:
                           data:
                             type: diagnostics
                             id: 688f881a-b3d5-4261-949c-9c18dfdd7fca
+            application/json:
+              schema:
+                oneOf:
+                  - type: array
+                    items: 
+                      type: object
+                  - type: object
         "400":
           $ref: "#/components/responses/BadRequestError"
         "401":
@@ -1015,7 +1482,6 @@ paths:
         - mutualCertAuth: []
       parameters:
         - $ref: "#/components/parameters/SparseFieldset"
-        - $ref: "#/components/parameters/AcceptJsonApi"
       responses:
         "200":
           description: |
@@ -1029,13 +1495,6 @@ paths:
                   - application/json
                   - application/vnd.api+json
           content:
-            application/json:
-              schema:
-                oneOf:
-                  - type: array
-                    items: 
-                      type: object
-                  - type: object
             application/vnd.api+json:
               examples:
                 initial:
@@ -1075,6 +1534,13 @@ paths:
                             leaderRouterId: 78
                           extPanId: 'a7b7d5d07d9ec2fa'
                           created: '2025-02-25T17:31:54+02:00'
+            application/json:
+              schema:
+                oneOf:
+                  - type: array
+                    items: 
+                      type: object
+                  - type: object
         "400":
           $ref: "#/components/responses/BadRequestError"
         "401":
@@ -1146,7 +1612,6 @@ paths:
       parameters:
         - $ref: "#/components/parameters/deviceId"
         - $ref: "#/components/parameters/SparseFieldset"
-        - $ref: "#/components/parameters/AcceptJsonApi"
       responses:
         "200":
           description: |
@@ -1160,6 +1625,27 @@ paths:
                   - application/json
                   - application/vnd.api+json
           content:
+            application/vnd.api+json:
+              examples:
+                threadDevice:
+                  summary: 96518e5497d5b9f3
+                  value:
+                    data:
+                      id: '96518e5497d5b9f3'
+                      type: threadDevice
+                      attributes:
+                        extAddress: '96518e5497d5b9f3'
+                        mlEidIid: '731f529f1266a17d'
+                        omrIpv6Address:
+                          - 'fd11:22:0:0:92de:b397:5758:368'
+                        hostname: 'knx-00fd5f0123a5.local'
+                        eui: '9035eafffef3e09c'
+                        role: 'leader'
+                        mode:
+                          fullThreadDevice: false
+                          rxOnWhenIdle: false
+                          fullNetworkData: false
+                        created: '2025-02-25T17:31:54+02:00'
             application/json:
               schema:
                 oneOf:
@@ -1182,27 +1668,6 @@ paths:
                       fullThreadDevice: false
                       rxOnWhenIdle: false
                       fullNetworkData: false
-            application/vnd.api+json:
-              examples:
-                threadDevice:
-                  summary: 96518e5497d5b9f3
-                  value:
-                    data:
-                      id: '96518e5497d5b9f3'
-                      type: threadDevice
-                      attributes:
-                        extAddress: '96518e5497d5b9f3'
-                        mlEidIid: '731f529f1266a17d'
-                        omrIpv6Address:
-                          - 'fd11:22:0:0:92de:b397:5758:368'
-                        hostname: 'knx-00fd5f0123a5.local'
-                        eui: '9035eafffef3e09c'
-                        role: 'child'
-                        mode:
-                          fullThreadDevice: false
-                          rxOnWhenIdle: false
-                          fullNetworkData: false
-                        created: '2025-02-25T17:31:54+02:00'
         "400":
           $ref: "#/components/responses/BadRequestError"
         "401":
@@ -1262,7 +1727,6 @@ paths:
         - mutualCertAuth: []
       parameters:
         - $ref: "#/components/parameters/SparseFieldset"
-        - $ref: "#/components/parameters/AcceptJsonApi"
       responses:
         "200":
           description: |
@@ -1279,13 +1743,6 @@ paths:
                   - application/json
                   - application/vnd.api+json
           content:
-            application/json:
-              schema:
-                oneOf:
-                  - type: array
-                    items: 
-                      type: object
-                  - type: object
             application/vnd.api+json:
               examples:
                 empty:
@@ -1468,6 +1925,13 @@ paths:
                             - channel: 12
                               maxRssi: [-45, -55, -50]
                           created: '2023-10-31T15:32:29Z'
+            application/json:
+              schema:
+                oneOf:
+                  - type: array
+                    items: 
+                      type: object
+                  - type: object
         "400":
           $ref: "#/components/responses/BadRequestError"
         "401":
@@ -1538,7 +2002,6 @@ paths:
         - Diagnostics
       parameters:
         - $ref: "#/components/parameters/diagnosticsId"
-        - $ref: "#/components/parameters/AcceptJsonApi"
       responses:
         "200":
           description: |
@@ -1552,6 +2015,22 @@ paths:
                   - application/json
                   - application/vnd.api+json
           content:
+            application/vnd.api+json:
+              examples:
+                energyScanReport:
+                  summary: 688f881a-b3d5-4261-949c-9c18dfdd7fca
+                  value:
+                    data:
+                      id: 688f881a-b3d5-4261-949c-9c18dfdd7fca
+                      type: energyScanReport
+                      attributes:
+                        origin: 'f2f307043724e8d0'
+                        report:
+                          - channel: 11
+                            maxRssi: [-45, -55, -50]
+                          - channel: 12
+                            maxRssi: [-45, -55, -50]
+                        created: '2023-10-31T15:32:29Z'
             application/json:
               schema:
                 oneOf:
@@ -1569,22 +2048,6 @@ paths:
                         maxRssi: [-45, -55, -50]
                       - channel: 12
                         maxRssi: [-45, -55, -50]
-            application/vnd.api+json:
-              examples:
-                energyScanReport:
-                  summary: 688f881a-b3d5-4261-949c-9c18dfdd7fca
-                  value:
-                    data:
-                      id: 688f881a-b3d5-4261-949c-9c18dfdd7fca
-                      type: energyScanReport
-                      attributes:
-                        origin: 'f2f307043724e8d0'
-                        report:
-                          - channel: 11
-                            maxRssi: [-45, -55, -50]
-                          - channel: 12
-                            maxRssi: [-45, -55, -50]
-                        created: '2023-10-31T15:32:29Z'
         "400":
           $ref: "#/components/responses/BadRequestError"
         "401":
@@ -1640,6 +2103,9 @@ paths:
                   - application/json
                   - application/vnd.api+json
           content:
+            application/vnd.api+json:
+              schema:
+                type: object
             application/json:
               schema:
                 oneOf:
@@ -1647,9 +2113,6 @@ paths:
                     items: 
                       type: object
                   - type: object
-            application/vnd.api+json:
-              schema:
-                type: object
         "415":
           $ref: "#/components/responses/UnsupportedMediaTypeError"
     delete:
@@ -2165,7 +2628,7 @@ components:
               minItems: 1
             timeout:
               type: integer
-              unit: seconds
+              description: Timeout in seconds
               minimum: 0
 
     Actions_resetNetworkDiagCounterTask:
@@ -2194,7 +2657,7 @@ components:
                 - mleCounters
             timeout:
               type: integer
-              unit: seconds
+              description: Timeout in seconds
               minimum: 0
               default: 93
 
@@ -2240,23 +2703,20 @@ components:
               description: Number of *IEEE 802.15.4 ED Scans* per channel.
             period:
               type: integer
-              unit: milliseconds
               minimum: 0
               maximum: 65535
               default: 32
               description: Period between successive IEEE 802.15.4 ED Scans* (milliseconds).
             scanDuration:
               type: integer
-              unit: milliseconds
               minimum: 0
               maximum: 100
               default: 0
               description: IEEE 802.15.4 ScanDuration to use when performing an *IEEE 802.15.4 ED Scan* (milliseconds).
             timeout:
               type: integer
-              unit: seconds
               minimum: 0
-              description: "calculated default: (len(channelMask) * count * (scanDuration + period) + 500 + 1000) / 1000 + 93" # +1000 to round up; + 93 for CoAP MAX_TRANSMIT_WAIT
+              description: "Timeout in seconds, calculated default: (len(channelMask) * count * (scanDuration + period) + 500 + 1000) / 1000 + 93" # +1000 to round up; + 93 for CoAP MAX_TRANSMIT_WAIT
 
     Actions_updateDeviceCollectionTask:
       type: object
@@ -2268,7 +2728,6 @@ components:
           properties:
             maxAge:
               type: integer
-              unit: seconds
               minimum: 0
               default: 30
               description: Maximum age in seconds for device information to be considered valid.
@@ -2284,7 +2743,6 @@ components:
               description: Number of devices to discover or update in the collection. Usually equal to the number of devices in the Thread network.
             timeout:
               type: integer
-              unit: seconds
               minimum: 0
               default: 93
               description: Timeout in seconds for the update device collection task.  
@@ -2313,6 +2771,25 @@ components:
               example: '2026-02-16T12:00:00Z'
 
     ### Actions Requests ########################################################
+    ActionsClientItem:
+      type: object
+      required:
+        - type
+        - attributes
+      properties:
+        type:
+          type: string
+          enum:
+            - addThreadDeviceTask
+            - getNetworkDiagnosticTask
+            - resetNetworkDiagCounterTask
+            - getEnergyScanTask
+            - updateDeviceCollectionTask
+            - generateLDevIdTask
+        attributes:
+          type: object
+      additionalProperties: false
+
     ActionsClient:
       type: object
       required:
@@ -2323,91 +2800,14 @@ components:
           minItems: 1
           items:
             anyOf:
-              - $ref: "#/components/schemas/ActionsClient_addThreadDeviceTask"
-              - $ref: "#/components/schemas/ActionsClient_getNetworkDiagnosticTask"
-              - $ref: "#/components/schemas/ActionsClient_resetNetworkDiagCounterTask"
-              - $ref: "#/components/schemas/ActionsClient_getEnergyScanTask"
-              - $ref: "#/components/schemas/ActionsClient_updateDeviceCollectionTask"
-              - $ref: "#/components/schemas/ActionsClient_generateLDevIdTask"
-        additionalProperties: false
-
-    ActionsClient_addThreadDeviceTask:
-      allOf:
-        - $ref: "#/components/schemas/Actions_addThreadDeviceTask"
-        - type: object
-          required:
-            - type
-            - attributes
-          additionalProperties: false
-
-    ActionsClient_getNetworkDiagnosticTask:
-      allOf:
-        - $ref: "#/components/schemas/Actions_getNetworkDiagnosticTask"
-        - type: object
-          required:
-            - type
-            - attributes
-          properties:
-            attributes:
-              type: object
-              required:
-                - destination
-                - types
-            additionalProperties: false
-          additionalProperties: false
-
-    ActionsClient_resetNetworkDiagCounterTask:
-      allOf:
-        - $ref: "#/components/schemas/Actions_resetNetworkDiagCounterTask"
-        - type: object
-          required:
-            - type
-            - attributes
-          properties:
-            attributes:
-              type: object
-              required:
-                - types
-              additionalProperties: false
-            additionalProperties: false
-
-    ActionsClient_getEnergyScanTask:
-      allOf:
-        - $ref: "#/components/schemas/Actions_getEnergyScanTask"
-        - type: object
-          required:
-            - type
-            - attributes
-          properties:
-            attributes:
-              type: object
-              required:
-                - destination
-                - channelMask
-                - count
-                - period
-                - scanDuration
-                - timeout
-              additionalProperties: false
-            additionalProperties: false
-
-    ActionsClient_updateDeviceCollectionTask:
-      allOf:
-        - $ref: "#/components/schemas/Actions_updateDeviceCollectionTask"
-        - type: object
-          required:
-            - type
-            - attributes
-          properties:
-            attributes:
-              type: object
-              required:
-                - maxAge
-                - maxRetries
-                - deviceCount
-                - timeout
-              additionalProperties: false
-            additionalProperties: false
+              - $ref: "#/components/schemas/ActionsClientItem"
+              - $ref: "#/components/schemas/Actions_addThreadDeviceTask"
+              - $ref: "#/components/schemas/Actions_getNetworkDiagnosticTask"
+              - $ref: "#/components/schemas/Actions_resetNetworkDiagCounterTask"
+              - $ref: "#/components/schemas/Actions_getEnergyScanTask"
+              - $ref: "#/components/schemas/Actions_updateDeviceCollectionTask"
+              - $ref: "#/components/schemas/Actions_generateLDevIdTask"
+      additionalProperties: false
 
     ActionsClient_generateLDevIdTask:
       allOf:
@@ -2417,8 +2817,14 @@ components:
             - type
             - attributes
           properties:
+            type:
+              enum: [generateLDevIdTask]
             attributes:
               type: object
+              properties:
+                currentDateTime:
+                  type: string
+                  format: date-time
               # currentDateTime is optional - no required fields
               additionalProperties: false
           additionalProperties: false
@@ -2466,27 +2872,52 @@ components:
         data:
           type: array
           items:
-            anyOf:
-              - $ref: "#/components/schemas/ActionsServer_addThreadDeviceTask"
-              - $ref: "#/components/schemas/ActionsServer_getNetworkDiagnosticTask"
-              - $ref: "#/components/schemas/ActionsServer_resetNetworkDiagCounterTask"
-              - $ref: "#/components/schemas/ActionsServer_getEnergyScanTask"
-              - $ref: "#/components/schemas/ActionsServer_updateDeviceCollectionTask"
-              - $ref: "#/components/schemas/ActionsServer_generateLDevIdTask"
+            $ref: "#/components/schemas/ActionItem"
 
-    ActionItem:
+    ActionDocument:
       type: object
       required:
         - data
       properties:
         data:
-          anyOf:
-            - $ref: "#/components/schemas/ActionsServer_addThreadDeviceTask"
-            - $ref: "#/components/schemas/ActionsServer_getNetworkDiagnosticTask"
-            - $ref: "#/components/schemas/ActionsServer_resetNetworkDiagCounterTask"
-            - $ref: "#/components/schemas/ActionsServer_getEnergyScanTask"
-            - $ref: "#/components/schemas/ActionsServer_updateDeviceCollectionTask"
-            - $ref: "#/components/schemas/ActionsServer_generateLDevIdTask"
+          $ref: "#/components/schemas/ActionItem"
+      additionalProperties: false
+
+    ActionItem:
+      type: object
+      required:
+        - id
+        - type
+        - attributes
+      properties:
+        id:
+          type: string
+          format: uuid
+        type:
+          type: string
+        attributes:
+          type: object
+          required:
+            - status
+          properties:
+            status:
+              type: string
+              enum:
+                - pending
+                - active
+                - completed
+                - stopped
+                - failed
+                - undiscovered
+                - attempted
+            created:
+              type: string
+              format: date-time
+          additionalProperties: true
+        relationships:
+          type: object
+          additionalProperties: true
+      additionalProperties: false
 
     ActionsServer:
       type: object
@@ -2515,85 +2946,6 @@ components:
                 - failed
                 - undiscovered
                 - attempted
-
-    ActionsServer_addThreadDeviceTask:
-      allOf:
-        - $ref: "#/components/schemas/ActionsServer"
-        - $ref: "#/components/schemas/Actions_addThreadDeviceTask"
-        - type: object
-          properties:
-            attributes:
-              type: object
-              status: 
-                type: string
-                enum:
-                  - pending
-                  - active
-                  - completed
-                  - stopped
-                  - failed
-                  - undiscovered
-                  - attempted
-              required:
-                - pskd
-                - timeout
-                - status
-
-    ActionsServer_getNetworkDiagnosticTask:
-      allOf:
-        - $ref: "#/components/schemas/ActionsServer"
-        - $ref: "#/components/schemas/Actions_getNetworkDiagnosticTask"
-        - type: object
-          properties:
-            attributes:
-              type: object
-              required:
-                - destination
-                - types
-                - timeout
-
-    ActionsServer_resetNetworkDiagCounterTask:
-      allOf:
-        - $ref: "#/components/schemas/ActionsServer"
-        - $ref: "#/components/schemas/Actions_resetNetworkDiagCounterTask"
-        - type: object
-          properties:
-            attributes:
-              type: object
-              required:
-                - destination
-                - types
-                - timeout
-
-    ActionsServer_getEnergyScanTask:
-      allOf:
-        - $ref: "#/components/schemas/ActionsServer"
-        - $ref: "#/components/schemas/Actions_getEnergyScanTask"
-        - type: object
-          properties:
-            attributes:
-              type: object
-              required:
-                - destination
-                - channelMask
-                - count
-                - period
-                - scanDuration
-                - timeout
-
-    ActionsServer_updateDeviceCollectionTask:
-      allOf:
-        - $ref: "#/components/schemas/ActionsServer"
-        - $ref: "#/components/schemas/Actions_updateDeviceCollectionTask"
-        - type: object
-          properties:
-            attributes:
-              type: object
-              required:
-                - maxAge
-                - maxRetries
-                - deviceCount
-                - timeout
 
     ActionsServer_generateLDevIdTask:
       allOf:
@@ -3059,60 +3411,9 @@ components:
             type: object
           example: {}
 
-    WellKnownThread:
-      type: object
-      required:
-        - api
-        - links
-      properties:
-        api:
-          type: object
-          required:
-            - version
-            - base
-          properties:
-            version:
-              type: string
-              pattern: ^[0-9]+\.[0-9]+(\.[0-9]+)?$
-              description: Semantic version (MAJOR.MINOR.PATCH) of the API
-            base:
-              type: string
-              pattern: ^/[/.a-zA-Z0-9_-]*$
-        links:
-          type: array
-          items:
-            type: object
-            required:
-              - href
-              - rel
-            properties:
-              href:
-                type: string
-                format: uri-reference
-              rel:
-                type: string
-              type:
-                type: array
-                minItems: 1
-                items:
-                  type: string
-              title:
-                type: string
-
   ### Parameters ##############################################################
   #############################################################################
   parameters:
-
-    AcceptJsonApi:
-      name: Accept
-      description: Must be set to `application/vnd.api+json` or `application/json`
-      in: header
-      required: false
-      schema:
-        type: string
-        enum:
-          - application/json
-          - application/vnd.api+json
 
     actionId:
       name: actionId
@@ -3163,37 +3464,16 @@ components:
         - `?fields[threadDevice]` (all attributes for threadDevice)
 
       in: query
-      style: deepObject
+      style: form
       required: false
       schema:
         type: object
-        #patternProperties: '^\w+$'
-        #items:
-        #  type: string
-        #  pattern: '^\w+$'
-        properties:
-           type:
-            type: array
-            items:
-              type: string
-              enum:
-              - threadDevice
-              - threadBorderRouter
-              - networkDiagnostics
-              - energyReport
-              - addThreadDeviceTask
-              - getNetworkDiagnosticTask
-              - resetNetworkDiagCounterTask
-              - getEnergyScanTask
-              - updateDeviceCollectionTask
-            minItems: 1
-            maxItems: 1
-            attributes:
-              type: string
-              pattern: '^[A-Za-z0-9_.\-]+(,[A-Za-z0-9_.\-]+)*$'
-              description: |
-                A comma-separated list of attribute keys to include in the response.
-                If omitted, all attributes of the type are included.
+        additionalProperties:
+          type: string
+          pattern: '^[A-Za-z0-9_.\-]*(,[A-Za-z0-9_.\-]+)*$'
+          description: |
+            Query value for a type-specific sparse fieldset.
+            Empty string selects all attributes for that type; otherwise use a comma-separated list.
       examples:
         allAttributes:
           summary: All attributes for a type
@@ -3484,12 +3764,6 @@ components:
         The client sent an invalid request.
         The client SHOULD perform action(s) to provide valid syntax before retrying the request.
       content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/SimpleError"
-          example:
-            title: "Bad Request"
-            status: 400
         application/vnd.api+json:
           schema:
             $ref: "#/components/schemas/Errors"
@@ -3498,18 +3772,18 @@ components:
               - title: Bad Request
                 status: 400
                 detail: The client sent an invalid request.
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SimpleError"
+          example:
+            title: "Bad Request"
+            status: 400
 
     NotFoundError:
       description: |
         The client requested a target resource that does not exist.
         The client SHOULD perform action(s) to re-align with the API or re-synchronize application state before retrying the request.
       content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/SimpleError"
-          example:
-            title: Not Found
-            status: 404
         application/vnd.api+json:
           schema:
             $ref: "#/components/schemas/Errors"
@@ -3518,18 +3792,18 @@ components:
               - title: Not Found
                 status: 404
                 detail: The client requested a target resource that does not exist.
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SimpleError"
+          example:
+            title: Not Found
+            status: 404
 
     MethodNotAllowedError:
       description: |
         The client used a method that is not supported by the target resource.
         The client SHOULD perform action(s) to re-align with the API before retrying the request.
       content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/SimpleError"
-          example:
-            title: Method Not Allowed
-            status: 405
         application/vnd.api+json:
           schema:
             $ref: "#/components/schemas/Errors"
@@ -3538,19 +3812,18 @@ components:
               - title: Method Not Allowed
                 status: 405
                 detail: The client used a method that is not supported by the target resource.
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SimpleError"
+          example:
+            title: Method Not Allowed
+            status: 405
 
     NotAcceptableError:
       description: |
         The client requests a content-type that is not supported by the target resource.
         The client SHOULD perform action(s) to re-align with the API before retrying the request.
       content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/SimpleError"
-          example:
-            title: Not Acceptable
-            status: 406
-            detail: "Supported media types: application/json, application/vnd.api+json"
         application/vnd.api+json:
           schema:
             $ref: "#/components/schemas/Errors"
@@ -3559,18 +3832,19 @@ components:
               - title: Not Acceptable
                 status: 406
                 detail: "Supported media types: application/json, application/vnd.api+json"
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SimpleError"
+          example:
+            title: Not Acceptable
+            status: 406
+            detail: "Supported media types: application/json, application/vnd.api+json"
 
     RequestTimeout:
       description: |
         The client request took too long to process.
         The client SHOULD perform action(s) validate correctness of the request and retry the validated request after a longer period of time.
       content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/SimpleError"
-          example:
-            title: Request Timeout
-            status: 408
         application/vnd.api+json:
           schema:
             $ref: "#/components/schemas/Errors"
@@ -3579,6 +3853,12 @@ components:
               - title: Request Timeout
                 status: 408
                 detail: The client request took too long to process.
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SimpleError"
+          example:
+            title: Request Timeout
+            status: 408
 
     ConflictError:
       description: |
@@ -3586,12 +3866,6 @@ components:
         either the request body cannot be applied to the resource state or the resource state cannot satisfy the request.
         The client SHOULD perform action(s) to re-synchronize application state before retrying the request.
       content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/SimpleError"
-          example:
-            title: Conflict
-            status: 409
         application/vnd.api+json:
           schema:
             $ref: "#/components/schemas/Errors"
@@ -3600,6 +3874,12 @@ components:
               - title: Conflict
                 status: 409
                 detail: The request conflicts with the current state of the target resource.
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SimpleError"
+          example:
+            title: Conflict
+            status: 409
 
 
     UnsupportedMediaTypeError:
@@ -3607,12 +3887,6 @@ components:
         The client sent a request body in an unsupported format.
         The client SHOULD change the request body format before retrying the request.
       content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/SimpleError"
-          example:
-            title: Unsupported Media Type
-            status: 415
         application/vnd.api+json:
           schema:
             $ref: "#/components/schemas/Errors"
@@ -3621,18 +3895,18 @@ components:
               - title: Unsupported Media Type
                 status: 415
                 detail: The client sent a request body in an unsupported format.
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SimpleError"
+          example:
+            title: Unsupported Media Type
+            status: 415
 
     UnprocessableError:
       description: |
         The server understands the content type of the request body correct, but was unable to process the contained information.
         The client SHOULD perform action(s) to correct the request body before retrying the request.
       content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/SimpleError"
-          example:
-            title: Unprocessable Content
-            status: 422
         application/vnd.api+json:
           schema:
             $ref: "#/components/schemas/Errors"
@@ -3641,18 +3915,18 @@ components:
               - title: Unprocessable Content
                 status: 422
                 detail: The request body could not be processed.
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SimpleError"
+          example:
+            title: Unprocessable Content
+            status: 422
 
     InternalServerError:
       description: |
         The server encountered an unexpected error.
         The client SHOULD retry after a longer period of time.
       content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/SimpleError"
-          example:
-            title: Internal Server Error
-            status: 500
         application/vnd.api+json:
           schema:
             $ref: "#/components/schemas/Errors"
@@ -3661,18 +3935,18 @@ components:
               - title: Internal Server Error
                 status: 500
                 detail: Unexpected error.
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SimpleError"
+          example:
+            title: Internal Server Error
+            status: 500
 
     ServiceUnavailableError:
       description: |
         The server is not ready to handle the request.
         The client SHOULD retry after a short period of time.
       content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/SimpleError"
-          example:
-            title: Service Unavailable
-            status: 503
         application/vnd.api+json:
           schema:
             $ref: "#/components/schemas/Errors"
@@ -3681,6 +3955,13 @@ components:
               - title: Service Unavailable
                 status: 503
                 detail: The server is not ready to handle the request.
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SimpleError"
+          example:
+            title: Service Unavailable
+            status: 503
+
   ### Security Schemes ########################################################
   #############################################################################
 
@@ -3695,8 +3976,11 @@ components:
         - Security scheme used for enrollment of ex-factory devices using the `admin` user and the initial password encoded within the printed DMC.
         - Clients must include the HTTP `Authorization` header containing `Basic <base64(username:password)>`.
         - If the device receives no or invalid credentials, it shall respond with 401 Unauthorized.
+
     mutualCertAuth:
-      type: mutualTLS
+      type: http
+      scheme: bearer
+      bearerFormat: certificate
       description: |
         Mutual TLS Authentication (mTLS):
         
@@ -3723,3 +4007,9 @@ components:
         - If the device receives no certificate, an invalid certificate, or an unenrolled certificate:
           - TLS handshake fails with SSL/TLS error (e.g., "certificate required" or "bad certificate")
           - Or HTTP 401 Unauthorized / 403 Forbidden if handshake succeeds but authorization fails
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SimpleError"
+          example:
+            title: Service Unavailable
+            status: 503
